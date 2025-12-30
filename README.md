@@ -47,7 +47,7 @@ The `models/` directory is pre-populated with the standard ComfyUI folder struct
     Run the following command to start the stack:
 
     ```bash
-        docker-compose up -d
+        docker compose up -d
     ```
 
     The `init-check` service will verify that credentials exist before allowing ComfyUI to start.
