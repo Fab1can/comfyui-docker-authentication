@@ -1,18 +1,9 @@
 services:
-  init-check:
-    image: alpine
-    volumes:
-      - ./check_initialized.sh:/check_initialized.sh
-      - ./nginx:/nginx
-    command: sh /check_initialized.sh
 
   comfyui:
-    depends_on:
-      init-check:
-        condition: service_completed_successfully
     image: zeroclue/comfyui:ultra-slim-torch2.8.0-cu128
     volumes:
-      - ./models:/workspace/ComfyUI/models
+      - ./workspace:/workspace
     stdin_open: true
     tty: true
     deploy:
@@ -23,12 +14,24 @@ services:
               count: all
               capabilities: [gpu]
 
+  auth-server:
+    build:
+      context: ./auth-server
+      dockerfile: Dockerfile
+    environment:
+      - NODE_ENV=production
+      - JWT_SECRET=${JWT_SECRET:-change-this-secret-key}
+      - JWT_EXPIRATION=7d
+      - PORT=3001
+    depends_on:
+      - comfyui
+
   nginx:
     image: nginx:alpine
     ports:
       - "${HOST_PORT}:80"
     volumes:
       - ./nginx/default.conf:/etc/nginx/conf.d/default.conf
-      - ./nginx/.htpasswd:/etc/nginx/.htpasswd
     depends_on:
       - comfyui
+      - auth-server
