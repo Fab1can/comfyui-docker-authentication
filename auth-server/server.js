@@ -9,6 +9,9 @@ const PORT = process.env.PORT || 3001;
 const JWT_SECRET = process.env.JWT_SECRET || 'change-this-secret-key';
 const JWT_EXPIRATION = process.env.JWT_EXPIRATION || '7d';
 const OTP_REGENERATION_INTERVAL = process.env.OTP_REGENERATION_INTERVAL || 30000;
+const MAX_LOGIN_ATTEMPTS = process.env.MAX_LOGIN_ATTEMPTS || 5;
+const MAX_LOGIN_ATTEMPTS_TIME_WINDOW = process.env.MAX_LOGIN_ATTEMPTS_TIME_WINDOW || 600000;
+const LOCKOUT_DURATION = process.env.LOCKOUT_DURATION || 600000;
 let otp = "00000";
 
 const generateOTP = () => {
@@ -27,6 +30,7 @@ app.use(express.json());
 app.use(cookieParser());
 
 const tokens = [];
+const attempts = {};
 
 const generateToken = () => {
     const token = jwt.sign({}, JWT_SECRET, { expiresIn: JWT_EXPIRATION });
@@ -51,11 +55,17 @@ const verifyToken = (req, res, next) => {
 // Routes
 
 /**
- * POST /login
+ * GET /login
  * Login endpoint - returns JWT token
  * Body: { _otp: string }
  */
 app.get('/login', (req, res) => {
+  const now = Date.now();
+  if (attempts[req.ip] && attempts[req.ip].length >= MAX_LOGIN_ATTEMPTS) {
+        attempts[req.ip] = attempts[req.ip].filter(timestamp => now - timestamp < MAX_LOGIN_ATTEMPTS_TIME_WINDOW);
+        attempts[req.ip].push(now);
+        return res.status(429).json({ error: 'Too many login attempts. Please try again later.' });
+  }
   const _otp = req.query.otp;
 
   if (!_otp) {
@@ -63,6 +73,12 @@ app.get('/login', (req, res) => {
   }
 
   if (_otp !== otp) {
+    if (!attempts[req.ip]) {
+        attempts[req.ip] = [now];
+    }else {
+        attempts[req.ip] = attempts[req.ip].filter(timestamp => now - timestamp < MAX_LOGIN_ATTEMPTS_TIME_WINDOW);
+        attempts[req.ip].push(now);
+    }
     return res.status(401).json({ error: 'Invalid OTP' });
   }
 
@@ -92,9 +108,9 @@ app.get('/login', (req, res) => {
 });
 
 /**
- * POST /logout
+ * GET /logout
  */
-app.post('/logout', verifyToken, (req, res) => {
+app.get('/logout', verifyToken, (req, res) => {
     const token = req.headers.authorization.split(' ')[1];
     const index = tokens.indexOf(token);
     if (index > -1) {
@@ -120,7 +136,7 @@ app.get('/verify', verifyToken, (req, res) => {
  * GET /refresh
  * Refresh the JWT token (extends expiration)
  */
-app.post('/refresh', verifyToken, (req, res) => {
+app.get('/refresh', verifyToken, (req, res) => {
   const newToken = generateToken();
   const maxAgeMs = (() => {
     const exp = (JWT_EXPIRATION || '7d').toString();
