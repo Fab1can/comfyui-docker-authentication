@@ -1,72 +1,122 @@
-# ComfyUI Docker Setup with Nginx Authentication
+# ComfyUI Docker Authentication
 
-This project provides a Docker Compose setup for running [ComfyUI](https://github.com/comfyanonymous/ComfyUI) with Nginx as a reverse proxy, adding a layer of Basic Authentication for security.
+A Docker Compose stack that runs [ComfyUI](https://github.com/comfyanonymous/ComfyUI) behind an Nginx reverse proxy protected by JWT-based authentication. A lightweight Node.js auth server handles login via a rotating OTP (One-Time Password) and issues signed JWT tokens stored as HTTP-only cookies.
 
-## Features
+## Architecture
 
-- **ComfyUI**: Runs the latest ComfyUI (using `zeroclue/comfyui` image) with NVIDIA GPU support.
-- **Nginx Reverse Proxy**: Handles HTTP requests and WebSocket connections.
-- **Basic Authentication**: Protects your ComfyUI instance with a username and password.
-- **Persistent Models**: Maps the local `models/` directory to the container, so your models are preserved.
+| Service | Image / Source | Description |
+|---|---|---|
+| `comfyui` | `zeroclue/comfyui:ultra-slim-torch2.8.0-cu128` | ComfyUI with NVIDIA GPU support |
+| `auth-server` | `./auth-server` (Node.js/Express) | Issues and validates JWT tokens; OTP-based login |
+| `nginx` | `nginx:alpine` | Reverse proxy; enforces JWT authentication via `auth_request` |
+
+### Authentication flow
+
+1. The auth-server prints a 5-digit OTP to its logs on startup and regenerates it every 30 seconds (configurable).
+2. A client calls `GET /auth/login?otp=<OTP>` to obtain a JWT token, which is stored as an HTTP-only cookie.
+3. Nginx validates every request to ComfyUI by forwarding the cookie to `/_auth_request` (backed by `GET /auth/verify`).
+4. Tokens can be refreshed with `GET /auth/refresh` and invalidated with `GET /auth/logout`.
 
 ## Prerequisites
 
-- [Docker](https://docs.docker.com/get-docker/)
-- [Docker Compose](https://docs.docker.com/compose/install/)
+- [Docker](https://docs.docker.com/get-docker/) & [Docker Compose](https://docs.docker.com/compose/install/)
 - [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) (required for GPU support)
-
-## Directory Structure
-
-The `models/` directory is pre-populated with the standard ComfyUI folder structure. Place your model checkpoints, LoRAs, embeddings, etc., in their respective subfolders within `models/`.
 
 ## Setup & Installation
 
-1. **Clone the Repository**
+1. **Clone the repository**
 
     ```bash
-    git clone https://github.com/yourusername/your-repo.git
-    cd your-repo
+    git clone https://github.com/Fab1can/comfyui-docker-authentication.git
+    cd comfyui-docker-authentication
     ```
 
-2.  **Initialize Credentials**
+2. **Configure environment variables**
 
-    Before starting the containers, you must create a user for Nginx Basic Auth. Run the provided script:
+    Copy the auth-server example file and set at minimum `JWT_SECRET`:
 
     ```bash
-    ./renew_user.sh
+    cp auth-server/.env.example auth-server/.env
+    # Edit auth-server/.env and set JWT_SECRET to a strong random value
     ```
 
-    Follow the prompts to enter a username and password. This will generate an `nginx/.htpasswd` file.
-
-3.  **Configure Environment**
-
-    The `docker-compose.yml` uses a `HOST_PORT` variable to define which port Nginx listens on. The default is set to `8188`. You can change this by editing the `.env` file or setting the variable in your shell.
-
-4.  **Start the Services**
-
-    Run the following command to start the stack:
+    The root `.env` file controls the host port Nginx listens on (default `8188`):
 
     ```bash
-        docker compose up -d
+    # .env
+    HOST_PORT=8188
     ```
 
-    The `init-check` service will verify that credentials exist before allowing ComfyUI to start.
+3. **Start the stack**
 
-## Usage
+    ```bash
+    docker compose up -d
+    ```
 
-Once the containers are running, access ComfyUI by navigating to:
+4. **Get the OTP**
 
-`http://localhost:<HOST_PORT>` (e.g., `http://localhost:8188`)
+    Read the OTP from the auth-server logs:
 
-You will be prompted to enter the username and password you configured in step 1.
+    ```bash
+    docker compose logs auth-server
+    ```
 
-## Managing Models
+    Look for a line like:
+    ```
+    2026-03-06T09:00:00.000Z: OTP generated: 47291
+    ```
 
-To add new models:
-1.  Place the model files in the appropriate subdirectory under `models/` (e.g., `models/checkpoints/`, `models/loras/`).
-2.  Refresh the ComfyUI interface (or restart the container if needed, though ComfyUI usually detects new files on refresh).
+5. **Log in**
+
+    ```bash
+    curl -c cookies.txt "http://localhost:8188/auth/login?otp=47291"
+    ```
+
+    On success you will receive `{"success":true,"token":"..."}` and a `jwt` cookie is set.
+
+6. **Open ComfyUI**
+
+    Navigate to `http://localhost:8188` in a browser that holds the `jwt` cookie (e.g., after logging in via the browser directly at `http://localhost:8188/auth/login?otp=<OTP>`).
+
+## Environment Variables
+
+### Root `.env`
+
+| Variable | Default | Description |
+|---|---|---|
+| `HOST_PORT` | `8188` | Host port mapped to Nginx |
+
+### `auth-server/.env`
+
+| Variable | Default | Description |
+|---|---|---|
+| `PORT` | `3001` | Auth-server listen port |
+| `JWT_SECRET` | `change-this-secret-key` | Secret used to sign JWT tokens — **must be changed** |
+| `JWT_EXPIRATION` | `7d` | Token lifetime (e.g. `7d`, `12h`, `30m`) |
+| `OTP_REGENERATION_INTERVAL` | `30000` | OTP rotation interval in milliseconds |
+| `MAX_LOGIN_ATTEMPTS` | `5` | Max failed login attempts before rate-limiting |
+| `MAX_LOGIN_ATTEMPTS_TIME_WINDOW` | `600000` | Time window (ms) for counting failed attempts |
+| `LOCKOUT_DURATION` | `600000` | Lockout duration in milliseconds (currently informational) |
+
+## Auth Server Endpoints
+
+All auth endpoints are available under the `/auth/` prefix through Nginx.
+
+| Method | Path | Auth required | Description |
+|---|---|---|---|
+| `GET` | `/auth/login?otp=<OTP>` | No | Exchange a valid OTP for a JWT cookie |
+| `GET` | `/auth/logout` | Yes (Bearer) | Invalidate the current token |
+| `GET` | `/auth/verify` | Yes (Bearer) | Verify the current token |
+| `GET` | `/auth/refresh` | Yes (Bearer) | Rotate the current token |
+| `GET` | `/auth/health` | No | Health check |
+
+## Workspace
+
+ComfyUI data (models, outputs, etc.) is persisted in the `./workspace` directory, which is mounted into the container at `/workspace`.
 
 ## Troubleshooting
 
--   **"Error: nginx/.htpasswd does not exist..."**: This means you haven't run `./renew_user.sh` yet. The containers will fail to start until credentials are created.
--   **GPU not found**: Ensure you have the NVIDIA Container Toolkit installed and configured correctly on your host machine.
+- **401 on every request**: Make sure you have logged in and that the `jwt` cookie is present in your browser.
+- **OTP expired**: OTPs rotate every `OTP_REGENERATION_INTERVAL` ms (default 30 s). Check the auth-server logs for the latest OTP.
+- **Too many login attempts (429)**: Wait for the lockout window to expire (default 10 minutes).
+- **GPU not found**: Ensure the NVIDIA Container Toolkit is installed and configured on the host machine.
