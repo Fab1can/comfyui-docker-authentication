@@ -120,3 +120,9 @@ ComfyUI data (models, outputs, etc.) is persisted in the `./workspace` directory
 - **OTP expired**: OTPs rotate every `OTP_REGENERATION_INTERVAL` ms (default 30 s). Check the auth-server logs for the latest OTP.
 - **Too many login attempts (429)**: Wait for the lockout window to expire (default 10 minutes).
 - **GPU not found**: Ensure the NVIDIA Container Toolkit is installed and configured on the host machine.
+
+## License
+
+This project is licensed under the [Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International (CC BY-NC-SA 4.0)](https://creativecommons.org/licenses/by-nc-sa/4.0/) license.
+
+[![CC BY-NC-SA 4.0](https://licensebuttons.net/l/by-nc-sa/4.0/88x31.png)](https://creativecommons.org/licenses/by-nc-sa/4.0/)
